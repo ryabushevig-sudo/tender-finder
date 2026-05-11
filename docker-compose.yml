@@ -1,0 +1,26 @@
+services:
+  backend:
+    build: ./backend
+    container_name: tender-finder-backend
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/tender_finder.db
+      - UPLOAD_DIR=/app/data/uploads
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:8080
+      # if you run Ollama on the host machine, the docker network needs this:
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+
+  frontend:
+    build: ./frontend
+    container_name: tender-finder-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend

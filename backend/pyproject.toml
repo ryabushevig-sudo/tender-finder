@@ -1,0 +1,52 @@
+[project]
+name = "tender-finder-backend"
+version = "0.1.0"
+description = "Tender document parsing and supplier search backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "python-multipart>=0.0.9",
+    "python-docx>=1.1.2",
+    "pdfplumber>=0.11.0",
+    "openpyxl>=3.1.5",
+    "httpx>=0.27.0",
+    "selectolax>=0.3.21",
+    "trafilatura>=1.12.0",
+    "tenacity>=9.0.0",
+    "loguru>=0.7.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "httpx>=0.27.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]
+# B008: FastAPI relies on Depends() in defaults
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
