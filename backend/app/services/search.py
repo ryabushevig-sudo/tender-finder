@@ -29,8 +29,18 @@ DEFAULT_EXCLUDED_DOMAINS = {
 }
 
 PRICE_PATTERNS = [
-    re.compile(r"(\d[\d\s\u00a0]*[.,]?\d*)\s*(?:руб(?:\.|лей)?|₽|RUB)", re.IGNORECASE),
-    re.compile(r"(?:цена|стоимость)\s*[:\-]?\s*(\d[\d\s\u00a0]*[.,]?\d*)", re.IGNORECASE),
+    # Matches: "12 345,67 руб", "1 250 ₽", but caps the digit group at 7 digits
+    # so that long article numbers are not slurped in.
+    re.compile(
+        r"(?<![\d.])(\d{1,3}(?:[\s\u00a0]\d{3}){0,2}(?:[.,]\d{1,2})?|\d{1,7})"
+        r"\s*(?:руб(?:\.|лей)?|₽|RUB)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:цена|стоимость)\s*[:\-]?\s*"
+        r"(\d{1,3}(?:[\s\u00a0]\d{3}){0,2}(?:[.,]\d{1,2})?|\d{1,7})",
+        re.IGNORECASE,
+    ),
 ]
 
 PHONE_PATTERN = re.compile(
@@ -85,7 +95,7 @@ async def search_suppliers(
     excluded = (excluded_domains or set()) | DEFAULT_EXCLUDED_DOMAINS
     limit = max_results or settings.max_search_results
 
-    augmented = f"{query} купить поставщик"
+    augmented = f"{query} купить"
     logger.info("Search query: {}", augmented)
 
     async with httpx.AsyncClient(
