@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -16,6 +17,95 @@ class LLMError(RuntimeError):
     """Raised when the underlying LLM provider fails."""
 
 
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+
+
+def _parse_json_tolerant(content: str, *, source: str, finish_reason: str | None = None) -> dict[str, Any]:
+    """Parse JSON from an LLM response, tolerating common issues:
+    - markdown code fences (```json ... ```)
+    - leading/trailing prose
+    - truncation (finish_reason='length'): close open arrays/objects and salvage what parses
+    """
+    if not content:
+        raise LLMError(f"Empty content from {source}")
+
+    cleaned = _CODE_FENCE_RE.sub("", content).strip()
+    start = cleaned.find("{")
+    if start == -1:
+        logger.warning("{}: no JSON object marker in response: {}", source, cleaned[:500])
+        raise LLMError(f"No JSON object in {source} response")
+    candidate = cleaned[start:]
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as direct_exc:
+        salvaged = _try_salvage_truncated_json(candidate)
+        if salvaged is not None:
+            logger.warning(
+                "{} returned truncated JSON (finish_reason={}); salvaged {} top-level keys",
+                source,
+                finish_reason,
+                len(salvaged) if isinstance(salvaged, dict) else "?",
+            )
+            return salvaged
+        logger.warning(
+            "Failed to parse {} JSON (finish_reason={}): head={!r} tail={!r}",
+            source,
+            finish_reason,
+            candidate[:200],
+            candidate[-200:],
+        )
+        raise LLMError(f"Invalid JSON from {source}: {direct_exc}") from direct_exc
+
+
+def _try_salvage_truncated_json(text: str) -> dict[str, Any] | None:
+    """Best-effort fix for JSON cut off mid-stream by a token limit.
+
+    Strategy: scan character by character, tracking brace/bracket depth and
+    string state. At the last position where we were inside a structure that
+    could be cleanly closed (i.e. between items in an array), record a
+    candidate end. Then try to parse text[:candidate] + matching closers.
+    """
+    depth_stack: list[str] = []  # stack of '{' or '['
+    in_string = False
+    escape = False
+    last_safe_end = -1  # index *after* the last clean item separator
+    last_safe_close: list[str] = []
+
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            depth_stack.append(ch)
+        elif ch in "}]":
+            if depth_stack:
+                depth_stack.pop()
+            if not depth_stack:
+                last_safe_end = i + 1
+                last_safe_close = []
+        elif ch == "," and depth_stack:
+            # Safe place to truncate the inner-most container
+            last_safe_end = i  # don't include the comma
+            last_safe_close = ["}" if c == "{" else "]" for c in reversed(depth_stack)]
+
+    if last_safe_end > 0:
+        candidate = text[:last_safe_end] + "".join(last_safe_close)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 class LLMProvider(ABC):
     """Common interface for chat-completion-style providers."""
 
@@ -26,7 +116,7 @@ class LLMProvider(ABC):
         user: str,
         *,
         temperature: float = 0.1,
-        max_tokens: int = 4096,
+        max_tokens: int = 16000,
     ) -> dict[str, Any]:
         """Send a chat request, request JSON output, return parsed JSON or raise."""
 
@@ -47,7 +137,7 @@ class OllamaProvider(LLMProvider):
         user: str,
         *,
         temperature: float = 0.1,
-        max_tokens: int = 4096,
+        max_tokens: int = 16000,
     ) -> dict[str, Any]:
         payload = {
             "model": self.model,
@@ -69,11 +159,7 @@ class OllamaProvider(LLMProvider):
         content = data.get("message", {}).get("content", "")
         if not content:
             raise LLMError("Empty content from Ollama")
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            logger.warning("Failed to parse Ollama JSON: {}", content[:500])
-            raise LLMError(f"Invalid JSON from Ollama: {exc}") from exc
+        return _parse_json_tolerant(content, source="Ollama", finish_reason=data.get("done_reason"))
 
     async def health(self) -> bool:
         try:
@@ -99,7 +185,7 @@ class OpenRouterProvider(LLMProvider):
         user: str,
         *,
         temperature: float = 0.1,
-        max_tokens: int = 4096,
+        max_tokens: int = 16000,
     ) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -129,11 +215,8 @@ class OpenRouterProvider(LLMProvider):
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise LLMError(f"Unexpected OpenRouter response: {data}") from exc
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            logger.warning("Failed to parse OpenRouter JSON: {}", content[:500])
-            raise LLMError(f"Invalid JSON from OpenRouter: {exc}") from exc
+        finish_reason = data["choices"][0].get("finish_reason")
+        return _parse_json_tolerant(content, source="OpenRouter", finish_reason=finish_reason)
 
     async def health(self) -> bool:
         try:
