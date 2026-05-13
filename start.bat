@@ -1,106 +1,125 @@
 @echo off
-chcp 65001 > nul
-setlocal enableextensions
+setlocal
 title Tender Finder
+cd /d "%~dp0"
 
 echo ====================================================
-echo  Tender Finder - запуск
+echo  Tender Finder - launcher
+echo  Working dir: %CD%
 echo ====================================================
 echo.
 
-REM 1. Проверка Docker Desktop
+REM Step 1: Docker installed?
 where docker >nul 2>&1
-if errorlevel 1 (
-    echo [ОШИБКА] Docker Desktop не установлен.
-    echo.
-    echo Скачайте и установите Docker Desktop:
-    echo   https://www.docker.com/products/docker-desktop/
-    echo.
-    echo После установки запустите Docker Desktop и снова откройте этот файл.
-    echo.
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto no_docker
 
-REM 2. Проверка, что Docker Desktop запущен
+REM Step 2: Docker daemon running?
 docker info >nul 2>&1
-if errorlevel 1 (
-    echo [!] Docker Desktop не запущен. Пытаюсь запустить...
-    start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe" 2>nul
-    if errorlevel 1 (
-        echo.
-        echo Не удалось запустить Docker Desktop автоматически.
-        echo Откройте Docker Desktop вручную и подождите, пока кит/иконка
-        echo в трее перестанет вращаться, затем снова запустите start.bat.
-        echo.
-        pause
-        exit /b 1
-    )
-    echo Ожидаю готовность Docker (это занимает 30-60 секунд)...
-    set /a tries=0
-    :wait_loop
-    timeout /t 5 /nobreak >nul
-    docker info >nul 2>&1
-    if not errorlevel 1 goto docker_ready
-    set /a tries+=1
-    if %tries% lss 24 goto wait_loop
-    echo.
-    echo Docker не стартовал за 2 минуты. Откройте Docker Desktop вручную
-    echo и убедитесь, что он полностью запустился, затем запустите start.bat снова.
+if errorlevel 1 goto try_start_docker
+goto docker_ready
+
+:try_start_docker
+echo Docker Desktop is not running. Trying to launch it...
+if exist "C:\Program Files\Docker\Docker\Docker Desktop.exe" (
+    start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+) else (
+    echo Could not find Docker Desktop at the standard path.
+    echo Please open Docker Desktop manually, wait until the whale icon
+    echo in the tray stops animating, then run start.bat again.
     echo.
     pause
     exit /b 1
-    :docker_ready
 )
+echo Waiting for Docker to become ready (30-90 seconds)...
+set /a tries=0
+:wait_docker
+timeout /t 5 /nobreak >nul
+docker info >nul 2>&1
+if not errorlevel 1 goto docker_ready
+set /a tries+=1
+if %tries% lss 24 goto wait_docker
+echo Docker did not become ready in 2 minutes.
+echo Please open Docker Desktop manually and run start.bat again.
+echo.
+pause
+exit /b 1
 
-echo [OK] Docker Desktop работает.
+:docker_ready
+echo [OK] Docker is running.
 echo.
 
-REM 3. Запуск compose
+REM Step 3: Compose file present?
+if not exist "docker-compose.yml" (
+    echo [ERROR] docker-compose.yml not found in this folder.
+    echo Make sure start.bat is in the unpacked tender-finder folder
+    echo alongside docker-compose.yml.
+    echo Current folder: %CD%
+    echo.
+    pause
+    exit /b 1
+)
+
 echo ====================================================
-echo  Поднимаю контейнеры (первый запуск займёт 5-15 минут
-echo  из-за скачивания модели qwen2.5:3b ~2 ГБ)
+echo  Building and starting containers...
+echo  First run downloads qwen2.5:3b (~2 GB), takes 5-15 min.
+echo  Subsequent runs are fast.
 echo ====================================================
 echo.
 
 docker compose up -d --build
-if errorlevel 1 (
-    echo.
-    echo [ОШИБКА] docker compose не отработал. Полные логи:
-    docker compose logs
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto compose_failed
 
 echo.
-echo Жду готовность backend...
+echo Waiting for backend health check...
 set /a tries=0
-:health_loop
+:wait_backend
 timeout /t 3 /nobreak >nul
-curl -s -o nul -w "%%{http_code}" http://localhost:8000/api/system/health > "%TEMP%\tf_health.txt" 2>nul
-set /p HEALTH_CODE=<"%TEMP%\tf_health.txt"
+curl -s -o NUL -w "%%{http_code}" http://localhost:8000/api/system/health > "%TEMP%\tf_health.txt" 2>NUL
+set /p HTTP_CODE=<"%TEMP%\tf_health.txt"
 del "%TEMP%\tf_health.txt" >nul 2>&1
-if "%HEALTH_CODE%"=="200" goto backend_ready
+if "%HTTP_CODE%"=="200" goto backend_ready
 set /a tries+=1
-if %tries% lss 60 goto health_loop
-echo Backend не отвечает. Проверьте логи: docker compose logs backend
+if %tries% lss 100 goto wait_backend
+echo Backend did not respond in 5 minutes. Showing recent logs:
+docker compose logs --tail=50 backend
+echo.
 pause
 exit /b 1
-:backend_ready
 
-echo [OK] Backend готов.
+:backend_ready
+echo [OK] Backend is up.
 echo.
-echo Открываю http://localhost:5173 в браузере...
+echo Opening http://localhost:5173 in your default browser...
 start "" "http://localhost:5173"
 
 echo.
 echo ====================================================
-echo  Tender Finder запущен!
+echo  Tender Finder is running.
 echo.
-echo  Откройте: http://localhost:5173
-echo.
-echo  Для остановки: stop.bat
-echo  Логи: docker compose logs -f
+echo  URL:    http://localhost:5173
+echo  Stop:   double-click stop.bat
+echo  Logs:   docker compose logs -f
 echo ====================================================
 echo.
 pause
+exit /b 0
+
+:no_docker
+echo [ERROR] Docker Desktop is not installed (or not on PATH).
+echo.
+echo Install Docker Desktop:
+echo   https://www.docker.com/products/docker-desktop/
+echo.
+echo After installation, launch Docker Desktop, wait until it is fully
+echo started, then run start.bat again.
+echo.
+pause
+exit /b 1
+
+:compose_failed
+echo.
+echo [ERROR] docker compose failed. Recent logs:
+docker compose logs --tail=80
+echo.
+pause
+exit /b 1

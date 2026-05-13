@@ -1,12 +1,14 @@
 @echo off
-chcp 65001 > nul
-title Tender Finder - остановка
+setlocal
+title Tender Finder - stop
+cd /d "%~dp0"
 
-echo Останавливаю Tender Finder...
+echo Stopping Tender Finder...
 docker compose down
 
 echo.
-echo Готово. Данные документов сохранены в backend\data, модель Ollama — в Docker volume.
-echo Чтобы удалить всё включая модель: docker compose down -v
+echo Done. Document data is kept in backend\data, model is kept in the
+echo Docker volume. To remove everything including the model, run:
+echo   docker compose down -v
 echo.
 pause
