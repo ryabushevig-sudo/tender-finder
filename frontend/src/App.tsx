@@ -6,6 +6,7 @@ import {
   getDocument,
   getLlmHealth,
   listDocuments,
+  matchForItem,
   searchForItem,
   uploadDocument,
   type DocumentDetail,
@@ -26,6 +27,7 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchingItems, setSearchingItems] = useState<Set<string>>(new Set());
+  const [matchingItems, setMatchingItems] = useState<Set<string>>(new Set());
 
   const refreshDocuments = useCallback(async () => {
     try {
@@ -133,6 +135,26 @@ export default function App() {
     }
   };
 
+  const handleMatch = async (item: Item) => {
+    if (!selectedId) return;
+    setMatchingItems((s) => new Set(s).add(item.id));
+    setError(null);
+    try {
+      await matchForItem(item.id);
+      await refreshSelected(selectedId);
+    } catch (e) {
+      setError(
+        `Подбор по характеристикам не удался для "${item.name}": ${(e as Error).message}`,
+      );
+    } finally {
+      setMatchingItems((s) => {
+        const next = new Set(s);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
   const handleSearchAll = async () => {
     if (!selected) return;
     setBusy(`Поиск по ${selected.items.length} позициям…`);
@@ -202,10 +224,12 @@ export default function App() {
               document={selected}
               busy={!!busy}
               searchingItems={searchingItems}
+              matchingItems={matchingItems}
               onExtract={handleExtract}
               onExport={handleExport}
               onSearchAll={handleSearchAll}
               onSearchItem={handleSearch}
+              onMatchItem={handleMatch}
               onItemUpdated={handleItemUpdated}
             />
           )}
@@ -223,19 +247,23 @@ function DocumentPanel({
   document,
   busy,
   searchingItems,
+  matchingItems,
   onExtract,
   onExport,
   onSearchAll,
   onSearchItem,
+  onMatchItem,
   onItemUpdated,
 }: {
   document: DocumentDetail;
   busy: boolean;
   searchingItems: Set<string>;
+  matchingItems: Set<string>;
   onExtract: () => void;
   onExport: () => void;
   onSearchAll: () => void;
   onSearchItem: (item: Item) => void;
+  onMatchItem: (item: Item) => void;
   onItemUpdated: () => void;
 }) {
   return (
@@ -276,7 +304,9 @@ function DocumentPanel({
         <ItemsTable
           items={document.items}
           searchingItems={searchingItems}
+          matchingItems={matchingItems}
           onSearchItem={onSearchItem}
+          onMatchItem={onMatchItem}
           onItemUpdated={onItemUpdated}
         />
       ) : (

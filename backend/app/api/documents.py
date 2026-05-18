@@ -116,7 +116,10 @@ async def get_document(
     stmt = (
         select(Document)
         .where(Document.id == document_id)
-        .options(selectinload(Document.items).selectinload(Item.offers))
+        .options(
+            selectinload(Document.items).selectinload(Item.offers),
+            selectinload(Document.items).selectinload(Item.matches),
+        )
     )
     document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
@@ -161,7 +164,10 @@ async def extract_document_items(
     stmt = (
         select(Document)
         .where(Document.id == document_id)
-        .options(selectinload(Document.items).selectinload(Item.offers))
+        .options(
+            selectinload(Document.items).selectinload(Item.offers),
+            selectinload(Document.items).selectinload(Item.matches),
+        )
     )
     document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
@@ -209,7 +215,7 @@ async def extract_document_items(
     await session.commit()
 
     for item in new_items:
-        await session.refresh(item, attribute_names=["offers"])
+        await session.refresh(item, attribute_names=["offers", "matches"])
 
     return ExtractionResponse(items=[ItemRead.model_validate(i) for i in new_items])
 
@@ -222,7 +228,10 @@ async def export_document(
     stmt = (
         select(Document)
         .where(Document.id == document_id)
-        .options(selectinload(Document.items).selectinload(Item.offers))
+        .options(
+            selectinload(Document.items).selectinload(Item.offers),
+            selectinload(Document.items).selectinload(Item.matches),
+        )
     )
     document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:

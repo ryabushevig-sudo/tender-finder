@@ -21,6 +21,40 @@ class OfferRead(BaseModel):
     contact_email: str | None
 
 
+class SpecComparisonRead(BaseModel):
+    name: str
+    required: str | None = None
+    found: str | None = None
+    status: str = "unknown"
+    note: str | None = None
+
+
+class ProductMatchRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    position: int
+    hypothesis_brand: str | None
+    hypothesis_model: str | None
+    hypothesis_description: str | None
+    hypothesis_reasoning: str | None
+    search_query: str | None
+    found_title: str | None
+    found_url: str | None
+    found_domain: str | None
+    found_snippet: str | None
+    found_price: str | None
+    specs_compared: list[SpecComparisonRead] | None = None
+    match_score: int | None
+    verdict: str | None
+    summary: str | None
+
+
+class MatchResponse(BaseModel):
+    item_id: str
+    matches: list[ProductMatchRead]
+
+
 class ItemBase(BaseModel):
     name: str
     quantity: float | None = None
@@ -39,6 +73,7 @@ class ItemRead(ItemBase):
     document_id: str
     position: int
     offers: list[OfferRead] = Field(default_factory=list)
+    matches: list[ProductMatchRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

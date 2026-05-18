@@ -35,6 +35,33 @@ export type Offer = {
   contact_email: string | null;
 };
 
+export type SpecComparison = {
+  name: string;
+  required: string | null;
+  found: string | null;
+  status: "match" | "mismatch" | "unknown" | string;
+  note: string | null;
+};
+
+export type ProductMatch = {
+  id: string;
+  position: number;
+  hypothesis_brand: string | null;
+  hypothesis_model: string | null;
+  hypothesis_description: string | null;
+  hypothesis_reasoning: string | null;
+  search_query: string | null;
+  found_title: string | null;
+  found_url: string | null;
+  found_domain: string | null;
+  found_snippet: string | null;
+  found_price: string | null;
+  specs_compared: SpecComparison[] | null;
+  match_score: number | null;
+  verdict: "high" | "medium" | "low" | "no_data" | string | null;
+  summary: string | null;
+};
+
 export type Item = {
   id: string;
   document_id: string;
@@ -48,6 +75,7 @@ export type Item = {
   notes: string | null;
   search_query: string | null;
   offers: Offer[];
+  matches: ProductMatch[];
 };
 
 export type DocumentDetail = DocumentSummary & {
@@ -108,4 +136,11 @@ export async function searchForItem(itemId: string) {
     `/api/items/${itemId}/search`,
   );
   return res.data.offers;
+}
+
+export async function matchForItem(itemId: string) {
+  const res = await api.post<{ item_id: string; matches: ProductMatch[] }>(
+    `/api/items/${itemId}/match`,
+  );
+  return res.data.matches;
 }

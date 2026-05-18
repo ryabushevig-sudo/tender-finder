@@ -84,6 +84,63 @@ def build_xlsx(document: Document, items: list[Item]) -> bytes:
 
     _autosize(ws_offers, [10, 40, 28, 50, 60, 14, 18, 28, 50])
 
+    ws_matches = wb.create_sheet("Сопоставления")
+    match_headers = [
+        "№ позиции",
+        "Позиция",
+        "Гипотеза (марка / модель)",
+        "Описание гипотезы",
+        "Найденный товар",
+        "Сайт",
+        "Цена",
+        "Совпадение, %",
+        "Вердикт",
+        "Сопоставление характеристик",
+        "Резюме",
+        "Ссылка",
+    ]
+    ws_matches.append(match_headers)
+    for col_index, _ in enumerate(match_headers, start=1):
+        cell = ws_matches.cell(row=1, column=col_index)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+
+    for idx, item in enumerate(items, start=1):
+        for match in item.matches:
+            specs_text = ""
+            if match.specs_compared:
+                lines = []
+                for s in match.specs_compared:
+                    status = s.get("status", "unknown")
+                    marker = {"match": "+", "mismatch": "-", "unknown": "?"}.get(status, "?")
+                    lines.append(
+                        f"[{marker}] {s.get('name', '')}: ТЗ={s.get('required', '—')} | "
+                        f"найдено={s.get('found', '—')}"
+                    )
+                specs_text = "\n".join(lines)
+            brand_model = " ".join(
+                filter(None, [match.hypothesis_brand, match.hypothesis_model])
+            ) or "—"
+            ws_matches.append(
+                [
+                    idx,
+                    item.name,
+                    brand_model,
+                    match.hypothesis_description,
+                    match.found_title,
+                    match.found_domain,
+                    match.found_price,
+                    match.match_score,
+                    match.verdict,
+                    specs_text,
+                    match.summary,
+                    match.found_url,
+                ]
+            )
+
+    _autosize(ws_matches, [8, 36, 28, 36, 40, 22, 12, 14, 12, 60, 50, 60])
+
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
