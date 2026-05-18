@@ -159,16 +159,25 @@ _SPEC_PREFIXES = (
     "параметр",
     "спецификация",
 )
-# 44-ФЗ pattern: separate columns for spec-name and spec-value
+# 44-ФЗ pattern: separate columns for spec-name and spec-value.
+# Keep these prefixes narrow — broad words like "характеристика" also appear in the
+# generic header "Функциональные, технические характеристики…" that some
+# documents put as a *parent* header above all three (name, value, unit)
+# sub-headers — we don't want to claim the first such column as spec_name.
 _SPEC_NAME_PREFIXES = (
     "наименование показателя",
     "показатель",
-    "характеристика",
+    "показателя",
+    "наименование характеристик",
 )
 _SPEC_VALUE_PREFIXES = (
     "содержание",
     "значение",
     "значения",
+    "знчение",  # observed typo in real ТЗ ("Знчение показателя")
+)
+_SPEC_VALUE_NEGATIVE = (
+    "имеет значение",
 )
 _GOST_PREFIXES = ("гост", "ту ", "норматив")
 _OKPD_PREFIXES = ("окпд",)
@@ -286,7 +295,7 @@ def _extract_items_from_tables(text: str) -> list[ExtractedItem]:
             return col
 
         spec_name_col = claim(_SPEC_NAME_PREFIXES)
-        spec_value_col = claim(_SPEC_VALUE_PREFIXES)
+        spec_value_col = claim(_SPEC_VALUE_PREFIXES, _SPEC_VALUE_NEGATIVE)
         name_col = claim(_NAME_PREFIXES, _NAME_NEGATIVE)
         qty_col = claim(_QTY_PREFIXES, _QTY_NEGATIVE)
         unit_col = claim(_UNIT_PREFIXES)
@@ -447,6 +456,21 @@ def _extract_items_from_tables(text: str) -> list[ExtractedItem]:
                 non_empty = {c.strip() for c in cells if c.strip()}
                 if len(non_empty) <= 1:
                     continue
+                # Total / boilerplate rows like "Начальная (максимальная) цена
+                # договора" repeat the same text across many cells — skip.
+                if cells.count(cells[name_col]) >= 3:
+                    continue
+                if name_low.startswith("начальная") or \
+                   name_low.startswith("максимальная") or \
+                   "цена договора" in name_low or \
+                   "цены договоров" in name_low or \
+                   name_low.startswith("нмцд") or \
+                   name_low.startswith("нмцк"):
+                    continue
+                # In a simple-pattern table qty is a required signal; rows
+                # without a parseable qty are headers/notes/totals.
+                if qty is None:
+                    continue
                 item = ExtractedItem(
                     name=name,
                     quantity=qty,
@@ -601,31 +625,41 @@ async def extract_items(document_text: str) -> ExtractionResult:
 
 
 def _dedupe(items: list[ExtractedItem]) -> list[ExtractedItem]:
-    """Drop items that look like duplicates by normalized name (+ unit/qty).
+    """Collapse items with the same normalized name.
 
-    Earlier-added items win, so table-derived items beat LLM-derived ones.
+    When the same product appears in multiple tables (e.g. spec table +
+    price table), merge them: keep the longest spec dict and fill in any
+    missing unit / GOST / ОКПД2 / qty from the alternative.
     """
-    seen_full: set[tuple[str, str, float | None]] = set()
-    seen_name: set[str] = set()
-    result: list[ExtractedItem] = []
+    by_name: dict[str, ExtractedItem] = {}
+    order: list[str] = []
     for item in items:
         name_key = _normalize_name(item.name)
         if not name_key:
             continue
-        full_key = (
-            name_key,
-            (item.unit or "").strip().lower(),
-            item.quantity,
-        )
-        if full_key in seen_full:
+        existing = by_name.get(name_key)
+        if existing is None:
+            by_name[name_key] = item
+            order.append(name_key)
             continue
-        if name_key in seen_name:
-            # Same product, slightly different unit/qty noise: drop the later one
-            continue
-        seen_full.add(full_key)
-        seen_name.add(name_key)
-        result.append(item)
-    return result
+        # Merge — prefer the one with more specs as the base
+        if len(item.specifications) > len(existing.specifications):
+            base, extra = item, existing
+            by_name[name_key] = base
+        else:
+            base, extra = existing, item
+        if not base.quantity and extra.quantity:
+            base.quantity = extra.quantity
+        if not base.unit and extra.unit:
+            base.unit = extra.unit
+        if not base.gost and extra.gost:
+            base.gost = extra.gost
+        if not base.okpd2 and extra.okpd2:
+            base.okpd2 = extra.okpd2
+        for k, v in extra.specifications.items():
+            if k and k not in base.specifications:
+                base.specifications[k] = v
+    return [by_name[k] for k in order]
 
 
 def _normalize_name(name: str) -> str:
