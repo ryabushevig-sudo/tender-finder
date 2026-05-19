@@ -128,6 +128,31 @@ def test_nested_spec_table_without_explicit_header() -> None:
     assert specs.get("Зубчатые колеса, шт") == "не менее 20"
 
 
+def test_caption_row_before_header_does_not_pollute_columns() -> None:
+    """A caption row with a single non-empty cell must NOT join the header.
+
+    Reproduces a real ТЗ where the first table row is
+    ``ОПИСАНИЕ ОБЪЕКТА ЗАКУПКИ-ТОВАРЫ || || || ...``. Naively merging it
+    into the header used to cause "ТОВАРЫ" to match the name-column prefix
+    'товар' and steal the № column (so item name became '1').
+    """
+    text = """[Таблица 1]
+ОПИСАНИЕ ОБЪЕКТА ЗАКУПКИ-ТОВАРЫ ||  ||  ||  ||  ||  ||  || 
+№ п/п || Наименование товара || Код по ОКПД2 || Товарный знак || Ед. изм. || Кол-во || Наименование показателя || Описание, значение
+1 || 2 || 3 || 4 || 5 || 6 || 7 || 8
+1 || Гусеница для бульдозера || 29.32.30.390 ||  || шт. || 2 || Номенклатура || 24-22-1СП
+1 || Гусеница для бульдозера || 29.32.30.390 ||  || шт. || 2 || Длина башмака, мм || 500
+"""
+    items = _extract_items_from_tables(text)
+    assert len(items) == 1
+    assert items[0].name == "Гусеница для бульдозера"
+    assert items[0].quantity == 2
+    assert items[0].unit == "шт."
+    assert items[0].okpd2 == "29.32.30.390"
+    assert items[0].specifications.get("Номенклатура") == "24-22-1СП"
+    assert items[0].specifications.get("Длина башмака, мм") == "500"
+
+
 def test_multirow_header_with_pipe_in_cell() -> None:
     """Header cells with internal pipe separators (multi-paragraph) match prefixes."""
     text = """[Таблица 5]

@@ -623,6 +623,12 @@ def _find_header_row(block: list[str]) -> tuple[int, list[str]]:
         if _is_small_int(non_empty[0]):
             # "1 || Наименование ..." — looks like the first data row
             break
+        # Caption rows: only one cell has content but the row has several
+        # columns (e.g. "ОПИСАНИЕ ОБЪЕКТА ЗАКУПКИ-ТОВАРЫ ||  ||  || ...").
+        # These are titles, not real headers, and including them confuses
+        # prefix matching (e.g. "ТОВАРЫ" matching the name-column prefix).
+        if len(non_empty) == 1 and len(row) >= 3:
+            continue
         candidates.append(row)
         last_idx = i
     if not candidates:
