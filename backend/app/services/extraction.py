@@ -108,6 +108,8 @@ def _chunk_text(text: str, max_chars: int = 18000) -> list[str]:
 # --- Deterministic table extraction --------------------------------------
 
 _TABLE_MARKER_RE = re.compile(r"^\[(Таблица|Лист:|Страница)")
+_TABLE_ID_RE = re.compile(r"^\[Таблица ([\d.]+)\]")
+_NESTED_REF_RE = re.compile(r"\[Вложенная таблица ([\d.]+)\]")
 _CELL_SEP_RE = re.compile(r"\s*\|\|\s*")
 _NUM_RE = re.compile(r"[-+]?\d+[\d\s.,]*")
 
@@ -258,6 +260,80 @@ def _find_column(
     return -1
 
 
+def _parse_nested_spec_table(block: list[str]) -> dict[str, str]:
+    """Parse a nested 2-column spec table into a dict.
+
+    Nested tables in real ТЗ docs are inconsistent: some have a header row
+    (e.g. "Функциональные характеристики... || Требования к показателям") and
+    others jump straight to data. We treat the first row as a header only
+    when its first cell matches one of the spec-header keywords; otherwise
+    we use all rows as data.
+    """
+    specs: dict[str, str] = {}
+    if len(block) < 2:
+        return specs
+    start = 1
+    first_row = _CELL_SEP_RE.split(block[1])
+    if len(first_row) >= 2:
+        h0_low = first_row[0].lower()
+        h1_low = first_row[1].lower()
+        # Recognise an explicit header row: the second column reads like
+        # a "value/requirement" column header.
+        header_value_markers = (
+            "требования к показател",
+            "требование",
+            "требуемые показател",
+            "значение показател",
+            "значение",
+            "содержание",
+        )
+        header_name_hint = (
+            "характеристик" in h0_low
+            or "показател" in h0_low
+            or "наименован" in h0_low
+        )
+        if header_name_hint and any(m in h1_low for m in header_value_markers):
+            start = 2
+    for row in block[start:]:
+        cells = _CELL_SEP_RE.split(row)
+        if len(cells) < 2:
+            continue
+        name = _clean_cell(cells[0])
+        value = _clean_cell(cells[1])
+        if len(cells) > 2:
+            extras = [_clean_cell(c) for c in cells[2:] if _clean_cell(c)]
+            if extras:
+                value = (value + " " + " ".join(extras)).strip() if value else " ".join(extras)
+        if not name or name.lower() in _SKIP_NAME_VALUES:
+            continue
+        # Avoid clobbering when the same key appears multiple times (e.g. several
+        # "Наличие" requirements with different name lines)
+        if name in specs and specs[name] != value:
+            # Append distinct values
+            specs[name] = f"{specs[name]}; {value}" if value else specs[name]
+        else:
+            specs[name] = value
+    return specs
+
+
+def _collect_nested_specs(blocks: list[list[str]]) -> dict[str, dict[str, str]]:
+    """Find nested-table blocks (hierarchical IDs like 5.1) and parse each."""
+    nested: dict[str, dict[str, str]] = {}
+    for block in blocks:
+        if not block:
+            continue
+        m = _TABLE_ID_RE.match(block[0])
+        if not m:
+            continue
+        tid = m.group(1)
+        if "." not in tid:
+            continue
+        specs = _parse_nested_spec_table(block)
+        if specs:
+            nested[tid] = specs
+    return nested
+
+
 def _extract_items_from_tables(text: str) -> list[ExtractedItem]:
     """Find spec-list tables in the parsed text and extract rows deterministically.
 
@@ -269,11 +345,20 @@ def _extract_items_from_tables(text: str) -> list[ExtractedItem]:
     B. 44-ФЗ spec table — each row is one *spec* of an item; the product name
        repeats (or is blank, carrying forward) across many rows:
        № | Наименование товара | Наименование показателя | Значение | Ед | Кол-во
+
+    Also supports nested-table pattern — each row of the item table has a
+    reference like ``[Вложенная таблица 5.1]`` in its spec cell; the
+    referenced child table holds the actual characteristics.
     """
     items: list[ExtractedItem] = []
     blocks = _split_table_blocks(text)
+    nested_specs = _collect_nested_specs(blocks)
     for block in blocks:
         if len(block) < 3:
+            continue
+        # Skip nested-id blocks — they're consumed via references in parent tables.
+        first_marker = _TABLE_ID_RE.match(block[0])
+        if first_marker and "." in first_marker.group(1):
             continue
         header_idx, header_cells = _find_header_row(block)
         if header_idx == -1:
@@ -361,6 +446,11 @@ def _extract_items_from_tables(text: str) -> list[ExtractedItem]:
             if unit and unit.lower() in _SKIP_NAME_VALUES:
                 unit = None
 
+            # Collect references to nested spec tables anywhere in this row.
+            nested_refs: list[str] = []
+            for c in cells:
+                nested_refs.extend(_NESTED_REF_RE.findall(c))
+
             spec_kv: dict[str, Any] = {}
             if is_44fz:
                 spec_name = (
@@ -380,8 +470,25 @@ def _extract_items_from_tables(text: str) -> list[ExtractedItem]:
             else:
                 if specs_col != -1 and specs_col < len(cells):
                     specs_text = _clean_cell(cells[specs_col])
-                    if specs_text and specs_text.lower() not in _SKIP_NAME_VALUES:
-                        spec_kv["Технические характеристики"] = specs_text
+                    # Strip any nested-table reference markers — they were
+                    # already collected separately and the literal placeholder
+                    # is not a useful characteristic value.
+                    specs_text_clean = _NESTED_REF_RE.sub("", specs_text).strip()
+                    if (
+                        specs_text_clean
+                        and specs_text_clean.lower() not in _SKIP_NAME_VALUES
+                    ):
+                        spec_kv["Технические характеристики"] = specs_text_clean
+
+            # Merge in characteristics from any nested spec tables referenced
+            # by this row.
+            for ref_id in nested_refs:
+                nested = nested_specs.get(ref_id)
+                if not nested:
+                    continue
+                for k, v in nested.items():
+                    if k and k not in spec_kv:
+                        spec_kv[k] = v
 
             gost = None
             if gost_col != -1 and gost_col < len(cells):
@@ -520,8 +627,15 @@ def _find_header_row(block: list[str]) -> tuple[int, list[str]]:
         last_idx = i
     if not candidates:
         return -1, []
+    def _norm(cell: str) -> str:
+        # Header cells in our parser may contain in-cell paragraph separators
+        # ('|' between paragraphs). Normalise those so prefix matching works
+        # on cells like "Ед. | изм." (-> "Ед. изм.").
+        cell = re.sub(r"\s*\|\s*", " ", cell)
+        return re.sub(r"\s+", " ", cell).strip()
+
     if len(candidates) == 1:
-        return last_idx, candidates[0]
+        return last_idx, [_norm(c) for c in candidates[0]]
     # Merge cells across the candidate rows, padding short rows.
     width = max(len(r) for r in candidates)
     merged: list[str] = []
@@ -529,7 +643,7 @@ def _find_header_row(block: list[str]) -> tuple[int, list[str]]:
         parts: list[str] = []
         for row in candidates:
             if col < len(row):
-                v = row[col].strip()
+                v = _norm(row[col])
                 if v and v not in parts:
                     parts.append(v)
         merged.append(" / ".join(parts))

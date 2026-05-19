@@ -80,3 +80,61 @@ def test_typo_in_header_naimnovanie() -> None:
     items = _extract_items_from_tables(text)
     assert len(items) == 1
     assert "ВДН-8,5Х" in items[0].name
+
+
+def test_nested_spec_table_associated_with_item() -> None:
+    """Item rows that reference a nested ``[Вложенная таблица N.M]`` get its specs."""
+    text = """[Таблица 5]
+№ || Наименование товара || Характеристика товара || Ед. изм. || Кол-во
+1 || Робот Пиранья || [Вложенная таблица 5.1] || шт || 1
+2 || Робот КИТ || [Вложенная таблица 5.2] || шт || 3
+
+[Таблица 5.1]
+Функциональные, технические характеристики || Требования к показателям
+Тип робота || Подводный телеуправляемый
+Глубина погружения, м || Не менее 5
+
+[Таблица 5.2]
+Тип робота || Подводный программируемый
+Источник питания || Внешний от сети
+"""
+    items = _extract_items_from_tables(text)
+    assert len(items) == 2
+    piranya = items[0]
+    assert piranya.name == "Робот Пиранья"
+    assert piranya.quantity == 1
+    assert piranya.unit == "шт"
+    assert piranya.specifications.get("Тип робота") == "Подводный телеуправляемый"
+    assert piranya.specifications.get("Глубина погружения, м") == "Не менее 5"
+    assert "Функциональные, технические характеристики" not in piranya.specifications
+    kit = items[1]
+    assert kit.specifications.get("Источник питания") == "Внешний от сети"
+
+
+def test_nested_spec_table_without_explicit_header() -> None:
+    """Some nested spec tables jump straight to data rows (no header)."""
+    text = """[Таблица 2]
+№ || Наименование || Характеристика || Ед. || Кол-во
+1 || VEX IQ Супер набор || [Вложенная таблица 2.1] || шт || 4
+
+[Таблица 2.1]
+Конструктивные элементы из пластика, шт || не менее 99
+Зубчатые колеса, шт || не менее 20
+"""
+    items = _extract_items_from_tables(text)
+    assert len(items) == 1
+    specs = items[0].specifications
+    assert specs.get("Конструктивные элементы из пластика, шт") == "не менее 99"
+    assert specs.get("Зубчатые колеса, шт") == "не менее 20"
+
+
+def test_multirow_header_with_pipe_in_cell() -> None:
+    """Header cells with internal pipe separators (multi-paragraph) match prefixes."""
+    text = """[Таблица 5]
+№ || Наименование товара || Характеристика товара, требуемые показатели качества || Ед. | изм. || Кол-во
+1 || Тестовая позиция || Описание || шт || 7
+"""
+    items = _extract_items_from_tables(text)
+    assert len(items) == 1
+    assert items[0].unit == "шт"
+    assert items[0].quantity == 7

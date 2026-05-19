@@ -26,25 +26,7 @@ def parse_document(path: Path) -> str:
 
 def _parse_docx(path: Path) -> str:
     doc = DocxDocument(str(path))
-    blocks: list[str] = []
-
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if text:
-            blocks.append(text)
-
-    for ti, table in enumerate(doc.tables, start=1):
-        blocks.append(f"\n[Таблица {ti}]")
-        for row in table.rows:
-            cells = []
-            for cell in row.cells:
-                # collapse internal newlines so rows stay one-per-line
-                cell_text = " | ".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
-                cells.append(cell_text)
-            if any(cells):
-                blocks.append(" || ".join(cells))
-
-    return "\n".join(blocks)
+    return _render_docx(doc)
 
 
 def _parse_pdf(path: Path) -> str:
@@ -98,21 +80,66 @@ def parse_bytes(filename: str, data: bytes) -> str:
 
 def _parse_docx_bytes(data: bytes) -> str:
     doc = DocxDocument(BytesIO(data))
+    return _render_docx(doc)
+
+
+def _render_docx(doc) -> str:
+    """Render a python-docx Document to our normalized text format.
+
+    Top-level tables become ``[Таблица N]`` blocks. Nested tables
+    (tables embedded inside another table's cell) are emitted as
+    ``[Таблица N.M]`` blocks after the top-level ones, and the
+    enclosing parent cell text is augmented with a
+    ``[Вложенная таблица N.M]`` reference so the extractor can
+    associate them.
+    """
     blocks: list[str] = []
+    nested_blocks: list[str] = []
+
     for para in doc.paragraphs:
         text = para.text.strip()
         if text:
             blocks.append(text)
+
     for ti, table in enumerate(doc.tables, start=1):
-        blocks.append(f"\n[Таблица {ti}]")
-        for row in table.rows:
-            cells = []
-            for cell in row.cells:
-                cell_text = " | ".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
-                cells.append(cell_text)
-            if any(cells):
-                blocks.append(" || ".join(cells))
+        _render_table(table, str(ti), blocks, nested_blocks)
+
+    blocks.extend(nested_blocks)
     return "\n".join(blocks)
+
+
+def _render_table(
+    table,
+    table_id: str,
+    out_blocks: list[str],
+    nested_blocks: list[str],
+) -> None:
+    """Render one table (and recursively any nested ones) into out_blocks."""
+    out_blocks.append(f"\n[Таблица {table_id}]")
+    nested_counter = 0
+    for row in table.rows:
+        cells_text: list[str] = []
+        seen_in_row: set[int] = set()
+        for cell in row.cells:
+            cell_key = id(cell._tc)
+            if cell_key in seen_in_row:
+                # Merged cell: python-docx repeats the same underlying _tc
+                # across row.cells entries; only render it once.
+                continue
+            seen_in_row.add(cell_key)
+            paragraphs_text = " | ".join(
+                p.text.strip() for p in cell.paragraphs if p.text.strip()
+            )
+            cell_text = paragraphs_text
+            for nested in cell.tables:
+                nested_counter += 1
+                nested_id = f"{table_id}.{nested_counter}"
+                _render_table(nested, nested_id, nested_blocks, nested_blocks)
+                ref = f"[Вложенная таблица {nested_id}]"
+                cell_text = (cell_text + " " + ref).strip() if cell_text else ref
+            cells_text.append(cell_text)
+        if any(cells_text):
+            out_blocks.append(" || ".join(cells_text))
 
 
 def _parse_pdf_bytes(data: bytes) -> str:
