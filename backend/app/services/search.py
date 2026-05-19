@@ -114,22 +114,42 @@ async def search_suppliers(
     excluded = (excluded_domains or set()) | DEFAULT_EXCLUDED_DOMAINS
     limit = max_results or settings.max_search_results
 
-    # Restrict to Russian suppliers: ask DDG to scope to .ru / .рф sites and
-    # additionally filter results client-side by TLD.
-    augmented = f"{query} купить (site:.ru OR site:.рф OR site:.su)"
+    # Restrict to Russian suppliers via the `kl=ru-ru` region hint below and
+    # the TLD whitelist below. We intentionally do NOT inject `site:` operators
+    # into the query — DDG often returns a wait/anti-bot page when the query
+    # has multiple operators, breaking the search entirely.
+    augmented = f"{query} купить"
     logger.info("Search query: {}", augmented)
+
+    import asyncio as _asyncio
 
     async with httpx.AsyncClient(
         timeout=settings.request_timeout_seconds,
         headers={"User-Agent": settings.search_user_agent},
         follow_redirects=True,
     ) as client:
-        response = await client.post(
-            DDG_HTML_ENDPOINT,
-            data={"q": augmented, "kl": "ru-ru"},
-        )
-        response.raise_for_status()
-        html = response.text
+        html = ""
+        # DDG sometimes returns a 202 "anti-bot wait" page when it's nervous
+        # about a request. Retry a couple of times with a short backoff.
+        for attempt in range(3):
+            response = await client.post(
+                DDG_HTML_ENDPOINT,
+                data={"q": augmented, "kl": "ru-ru"},
+            )
+            if response.status_code == 200 and "result__a" in response.text:
+                html = response.text
+                break
+            if response.status_code in (202, 429):
+                logger.info(
+                    "DDG returned {} on attempt {}; backing off",
+                    response.status_code,
+                    attempt + 1,
+                )
+                await _asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            response.raise_for_status()
+            html = response.text
+            break
 
     parser = HTMLParser(html)
     results: list[SearchResult] = []
