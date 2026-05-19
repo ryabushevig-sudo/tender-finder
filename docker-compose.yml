@@ -1,0 +1,62 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: tender-finder-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  model-puller:
+    image: ollama/ollama:latest
+    container_name: tender-finder-model-puller
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Скачиваю модель qwen2.5:3b (~2 ГБ, потребуется один раз)..." && \
+        OLLAMA_HOST=http://ollama:11434 ollama pull qwen2.5:3b && \
+        echo "Модель готова."
+    restart: "no"
+
+  backend:
+    build: ./backend
+    container_name: tender-finder-backend
+    depends_on:
+      ollama:
+        condition: service_healthy
+      model-puller:
+        condition: service_completed_successfully
+    environment:
+      - LLM_PROVIDER=ollama
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5:3b
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/tender_finder.db
+      - UPLOAD_DIR=/app/data/uploads
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:8080
+      - SEARCH_PROVIDER=duckduckgo
+      - MAX_SEARCH_RESULTS=8
+      - REQUEST_TIMEOUT_SECONDS=15
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+
+  frontend:
+    build: ./frontend
+    container_name: tender-finder-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  ollama_models:
