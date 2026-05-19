@@ -28,6 +28,17 @@ DEFAULT_EXCLUDED_DOMAINS = {
     "rts-tender.ru",
 }
 
+# Restrict supplier search to the Russian Federation only. We accept any domain
+# whose host ends with one of these suffixes. .рф is the IDN top-level domain
+# for Russia; it appears either as "рф" (decoded) or "xn--p1ai" (punycode)
+# depending on how the URL was emitted, so we check both.
+ALLOWED_TLD_SUFFIXES: tuple[str, ...] = (
+    ".ru",
+    ".рф",
+    ".xn--p1ai",  # punycode form of .рф
+    ".su",
+)
+
 PRICE_PATTERNS = [
     # Matches: "12 345,67 руб", "1 250 ₽", but caps the digit group at 7 digits
     # so that long article numbers are not slurped in.
@@ -85,6 +96,14 @@ def _domain(url: str) -> str:
         return ""
 
 
+def _is_russian_domain(host: str) -> bool:
+    """True iff the host (or any sub-host) ends in a Russian TLD."""
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    return any(host.endswith(suffix) for suffix in ALLOWED_TLD_SUFFIXES)
+
+
 async def search_suppliers(
     query: str,
     *,
@@ -95,7 +114,9 @@ async def search_suppliers(
     excluded = (excluded_domains or set()) | DEFAULT_EXCLUDED_DOMAINS
     limit = max_results or settings.max_search_results
 
-    augmented = f"{query} купить"
+    # Restrict to Russian suppliers: ask DDG to scope to .ru / .рф sites and
+    # additionally filter results client-side by TLD.
+    augmented = f"{query} купить (site:.ru OR site:.рф OR site:.su)"
     logger.info("Search query: {}", augmented)
 
     async with httpx.AsyncClient(
@@ -124,6 +145,8 @@ async def search_suppliers(
             continue
         domain = _domain(url)
         if not domain or any(domain.endswith(d) for d in excluded):
+            continue
+        if not _is_russian_domain(domain):
             continue
         title = (a.text() or "").strip()
         snippet_node = result_node.css_first(".result__snippet")
